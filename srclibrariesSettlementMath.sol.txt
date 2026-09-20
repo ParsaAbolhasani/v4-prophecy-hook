@@ -1,0 +1,120 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+/// @title SettlementMath
+/// @notice Pure math library for payout computation and fee scaling
+/// @dev All functions are pure and tested with fuzzing
+library SettlementMath {
+    // ─── Constants ──────────────────────────────────────────────────
+
+    uint256 internal constant BPS_DENOMINATOR = 10_000;
+    uint256 internal constant BASE_HOUSE_EDGE_BPS = 200; // 2%
+    uint256 internal constant MAX_HOUSE_EDGE_BPS = 500;  // 5%
+    uint256 internal constant MAX_VOLATILITY_BPS = 300;  // 3% cap
+
+    // ─── Errors ─────────────────────────────────────────────────────
+
+    error InvalidCollateral();
+    error InvalidFee();
+    error Overflow();
+
+    // ─── Functions ──────────────────────────────────────────────────
+
+    /// @notice Computes the payout for a winner
+    /// @param lockedCollateral Total collateral locked in the round
+    /// @param houseEdgeBps House edge in basis points (2-5%)
+    /// @return payout The amount the winner receives
+    function computePayout(
+        uint256 lockedCollateral,
+        uint256 houseEdgeBps
+    ) internal pure returns (uint256 payout) {
+        if (lockedCollateral == 0) revert InvalidCollateral();
+        if (houseEdgeBps > MAX_HOUSE_EDGE_BPS) revert InvalidFee();
+
+        uint256 houseEdge = (lockedCollateral * houseEdgeBps) / BPS_DENOMINATOR;
+        payout = lockedCollateral - houseEdge;
+    }
+
+    /// @notice Computes dynamic fee based on volatility
+    /// @param baseFeeBps Base fee in basis points
+    /// @param volatilityBps Volatility in basis points
+    /// @return dynamicFeeBps The computed dynamic fee
+    function computeDynamicFee(
+        uint256 baseFeeBps,
+        uint256 volatilityBps
+    ) internal pure returns (uint256 dynamicFeeBps) {
+        if (baseFeeBps < BASE_HOUSE_EDGE_BPS) {
+            baseFeeBps = BASE_HOUSE_EDGE_BPS;
+        }
+
+        // Cap volatility contribution
+        uint256 cappedVolatility = volatilityBps > MAX_VOLATILITY_BPS
+            ? MAX_VOLATILITY_BPS
+            : volatilityBps;
+
+        dynamicFeeBps = baseFeeBps + cappedVolatility;
+
+        if (dynamicFeeBps > MAX_HOUSE_EDGE_BPS) {
+            dynamicFeeBps = MAX_HOUSE_EDGE_BPS;
+        }
+    }
+
+    /// @notice Computes shares to mint for a deposit
+    /// @param amount Deposit amount
+    /// @param totalDeposits Current total deposits
+    /// @param totalShares Current total shares
+    /// @return shares Shares to mint
+    function computeShares(
+        uint256 amount,
+        uint256 totalDeposits,
+        uint256 totalShares
+    ) internal pure returns (uint256 shares) {
+        if (amount == 0) revert InvalidCollateral();
+
+        if (totalShares == 0 || totalDeposits == 0) {
+            return amount; // 1:1 for first deposit
+        }
+
+        shares = (amount * totalShares) / totalDeposits;
+    }
+
+    /// @notice Computes amount to withdraw for shares
+    /// @param shares Shares to burn
+    /// @param totalDeposits Current total deposits
+    /// @param totalShares Current total shares
+    /// @return amount Amount to withdraw
+    function computeWithdrawAmount(
+        uint256 shares,
+        uint256 totalDeposits,
+        uint256 totalShares
+    ) internal pure returns (uint256 amount) {
+        if (shares == 0) revert InvalidCollateral();
+        if (totalShares == 0) revert InvalidCollateral();
+
+        amount = (shares * totalDeposits) / totalShares;
+    }
+
+    /// @notice Computes absolute value of int128
+    function absInt128(int128 x) internal pure returns (uint256) {
+        return x >= 0 ? uint256(uint128(x)) : uint256(uint128(-x));
+    }
+
+    /// @notice Computes volatility in basis points
+    /// @param currentPrice Current price
+    /// @param previousPrice Previous price
+    /// @return volatilityBps Volatility in basis points
+    function computeVolatilityBps(
+        int64 currentPrice,
+        int64 previousPrice
+    ) internal pure returns (uint256 volatilityBps) {
+        if (previousPrice == 0) return 0;
+
+        int64 delta = currentPrice - previousPrice;
+        uint256 absDelta = delta >= 0
+            ? uint256(uint64(delta))
+            : uint256(uint64(-delta));
+
+        uint256 absPrev = uint256(uint64(previousPrice));
+        volatilityBps = (absDelta * BPS_DENOMINATOR) / absPrev;
+    }
+}

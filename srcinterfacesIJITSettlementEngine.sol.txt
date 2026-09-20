@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+/// @title IJITSettlementEngine
+/// @notice Interface for the JIT settlement engine
+interface IJITSettlementEngine {
+    // ─── Events ─────────────────────────────────────────────────────
+
+    event JITSettled(
+        address indexed assetIn,
+        address indexed assetOut,
+        uint256 amountIn,
+        uint256 amountOut,
+        address indexed recipient
+    );
+
+    event FallbackUsed(
+        address indexed asset,
+        uint256 amount,
+        address indexed recipient
+    );
+
+    // ─── Errors ─────────────────────────────────────────────────────
+
+    error SwapFailed();
+    error InsufficientOutput();
+    error OracleUnavailable();
+
+    // ─── Functions ──────────────────────────────────────────────────
+
+    function settleJIT(
+        address assetIn,
+        address assetOut,
+        uint256 amountOut,
+        address recipient
+    ) external returns (uint256 amountIn);
+
+    function settleFallback(
+        address asset,
+        uint256 amount,
+        address recipient
+    ) external;
+}
