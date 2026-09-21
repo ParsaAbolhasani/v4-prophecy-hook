@@ -1,0 +1,177 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {Test, console} from "forge-std/Test.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {SingleSidedVault} from "../src/SingleSidedVault.sol";
+import {ISingleSidedVault} from "../src/interfaces/ISingleSidedVault.sol";
+
+// Mock ERC20 for testing
+contract MockERC20 is ERC20 {
+    constructor(string memory name, string memory symbol) ERC20(name, symbol) {}
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+}
+
+contract SingleSidedVaultTest is Test {
+    SingleSidedVault public vault;
+    MockERC20 public token;
+
+    address public hook = address(0x1);
+    address public engine = address(0x2);
+    address public alice = address(0xA11CE);
+    address public bob = address(0xB0B);
+
+    function setUp() public {
+        vault = new SingleSidedVault(hook, engine);
+        token = new MockERC20("Test Token", "TEST");
+
+        // Fund users
+        token.mint(alice, 10_000e18);
+        token.mint(bob, 10_000e18);
+    }
+
+    // ─── Deposit Tests ──────────────────────────────────────────────
+
+    function test_Deposit_FirstDeposit() public {
+        vm.startPrank(alice);
+
+        token.approve(address(vault), 1000e18);
+        uint256 shares = vault.deposit(address(token), 1000e18);
+
+        vm.stopPrank();
+
+        assertEq(shares, 1000e18); // 1:1 for first deposit
+        assertEq(vault.balanceOf(address(token)), 1000e18);
+        assertEq(vault.sharesOf(address(token), alice), 1000e18);
+    }
+
+    function test_Deposit_SecondDeposit() public {
+        // Alice deposits first
+        vm.startPrank(alice);
+        token.approve(address(vault), 1000e18);
+        vault.deposit(address(token), 1000e18);
+        vm.stopPrank();
+
+        // Bob deposits
+        vm.startPrank(bob);
+        token.approve(address(vault), 500e18);
+        uint256 shares = vault.deposit(address(token), 500e18);
+        vm.stopPrank();
+
+        assertEq(shares, 500e18); // Proportional
+        assertEq(vault.balanceOf(address(token)), 1500e18);
+    }
+
+    function test_Deposit_RevertsOnZero() public {
+        vm.prank(alice);
+        vm.expectRevert(ISingleSidedVault.ZeroAmount.selector);
+        vault.deposit(address(token), 0);
+    }
+
+    // ─── Withdraw Tests ─────────────────────────────────────────────
+
+    function test_Withdraw_AfterDeposit() public {
+        // Deposit
+        vm.startPrank(alice);
+        token.approve(address(vault), 1000e18);
+        vault.deposit(address(token), 1000e18);
+
+        // Withdraw
+        uint256 amount = vault.withdraw(address(token), 500e18);
+        vm.stopPrank();
+
+        assertEq(amount, 500e18);
+        assertEq(vault.balanceOf(address(token)), 500e18);
+    }
+
+    function test_Withdraw_RevertsOnInsufficientShares() public {
+        vm.startPrank(alice);
+        token.approve(address(vault), 1000e18);
+        vault.deposit(address(token), 1000e18);
+
+        vm.expectRevert(ISingleSidedVault.InsufficientShares.selector);
+        vault.withdraw(address(token), 2000e18);
+        vm.stopPrank();
+    }
+
+    // ─── Payout Tests ───────────────────────────────────────────────
+
+    function test_Payout_ByHook() public {
+        // Deposit
+        vm.startPrank(alice);
+        token.approve(address(vault), 1000e18);
+        vault.deposit(address(token), 1000e18);
+        vm.stopPrank();
+
+        // Hook pays out
+        vm.prank(hook);
+        vault.payout(address(token), bob, 500e18);
+
+        assertEq(token.balanceOf(bob), 10_500e18);
+        assertEq(vault.balanceOf(address(token)), 500e18);
+    }
+
+    function test_Payout_RevertsOnInsufficientInventory() public {
+        vm.prank(hook);
+        vm.expectRevert(ISingleSidedVault.InsufficientInventory.selector);
+        vault.payout(address(token), bob, 1000e18);
+    }
+
+    function test_Payout_RevertsIfNotHook() public {
+        vm.prank(alice);
+        vm.expectRevert(ISingleSidedVault.Unauthorized.selector);
+        vault.payout(address(token), bob, 100e18);
+    }
+
+    // ─── JIT Tests ──────────────────────────────────────────────────
+
+    function test_JITSettle_ByHook() public {
+        // Deposit
+        vm.startPrank(alice);
+        token.approve(address(vault), 1000e18);
+        vault.deposit(address(token), 1000e18);
+        vm.stopPrank();
+
+        // Hook triggers JIT
+        vm.prank(hook);
+        vault.jitSettle(address(token), address(0x3), 500e18, bob);
+
+        // Tokens should be at engine
+        assertEq(token.balanceOf(engine), 500e18);
+    }
+
+    // ─── Yield Tests ────────────────────────────────────────────────
+
+    function test_AccrueYield_ByHook() public {
+        // Deposit
+        vm.startPrank(alice);
+        token.approve(address(vault), 1000e18);
+        vault.deposit(address(token), 1000e18);
+        vm.stopPrank();
+
+        // Accrue yield
+        vm.prank(hook);
+        vault.accrueYield(address(token), 100e18);
+
+        assertEq(vault.balanceOf(address(token)), 1100e18);
+    }
+
+    // ─── Fuzz Tests ─────────────────────────────────────────────────
+
+    function testFuzz_DepositWithdraw_Invariant(uint256 amount) public {
+        amount = bound(amount, 1e18, 5000e18);
+
+        vm.startPrank(alice);
+        token.approve(address(vault), amount);
+
+        uint256 shares = vault.deposit(address(token), amount);
+        uint256 withdrawn = vault.withdraw(address(token), shares);
+
+        vm.stopPrank();
+
+        assertEq(withdrawn, amount);
+    }
+}
