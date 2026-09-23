@@ -1,0 +1,106 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {Script, console} from "forge-std/Script.sol";
+import {PredictionHook} from "../src/PredictionHook.sol";
+import {SingleSidedVault} from "../src/SingleSidedVault.sol";
+import {JITSettlementEngine} from "../src/JITSettlementEngine.sol";
+import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
+import {Hooks} from "v4-core/libraries/Hooks.sol";
+import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
+
+/// @title DeployScript
+/// @notice Deployment script with HookMiner for deterministic hook address
+contract DeployScript is Script {
+    // ─── Canonical Addresses ────────────────────────────────────────
+
+    // Uniswap v4 PoolManager (same address on all chains)
+    address constant POOL_MANAGER = 0x000000000004444c5dc75cB358380D2e3dE08A90;
+
+    // Pyth Oracle (mainnet)
+    address constant PYTH_ORACLE = 0x4305FB66699C3B2702D4d05CF36551390A4c69C6;
+
+    // CREATE2 Deployer (for deterministic deployment)
+    address constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
+
+    function run() external {
+        // ─── Load Environment ───────────────────────────────────────
+        uint256 deployerKey = vm.envUint("PRIVATE_KEY");
+        bytes32 priceFeedId = vm.envBytes32("PRICE_FEED_ID");
+
+        console.log("=== Deploying Prophecy Hook ===");
+        console.log("Deployer:", vm.addr(deployerKey));
+        console.log("PoolManager:", POOL_MANAGER);
+        console.log("Pyth Oracle:", PYTH_ORACLE);
+        console.log("Price Feed ID:", vm.toString(priceFeedId));
+        console.log("");
+
+        vm.startBroadcast(deployerKey);
+
+        // ─── Step 1: Deploy Vault ───────────────────────────────────
+        SingleSidedVault vault = new SingleSidedVault(
+            address(0), // hook address will be set after hook deployment
+            address(0)  // engine address will be set after engine deployment
+        );
+        console.log("1. Vault deployed at:", address(vault));
+
+        // ─── Step 2: Deploy JIT Engine ──────────────────────────────
+        JITSettlementEngine engine = new JITSettlementEngine(
+            POOL_MANAGER,
+            address(vault)
+        );
+        console.log("2. JIT Engine deployed at:", address(engine));
+
+        // ─── Step 3: Mine Hook Address ──────────────────────────────
+        uint160 flags = uint160(
+            Hooks.BEFORE_SWAP_FLAG |
+            Hooks.AFTER_SWAP_FLAG |
+            Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+        );
+
+        bytes memory constructorArgs = abi.encode(
+            POOL_MANAGER,
+            address(vault),
+            address(engine),
+            PYTH_ORACLE,
+            priceFeedId
+        );
+
+        (address hookAddress, bytes32 salt) = HookMiner.find(
+            CREATE2_DEPLOYER,
+            flags,
+            type(PredictionHook).creationCode,
+            constructorArgs
+        );
+
+        console.log("3. Hook address mined:", hookAddress);
+        console.log("   Salt:", vm.toString(salt));
+
+        // ─── Step 4: Deploy Hook ────────────────────────────────────
+        PredictionHook hook = new PredictionHook{salt: salt}(
+            IPoolManager(POOL_MANAGER),
+            vault,
+            engine,
+            PYTH_ORACLE,
+            priceFeedId
+        );
+
+        require(
+            address(hook) == hookAddress,
+            "Hook address mismatch"
+        );
+        console.log("4. PredictionHook deployed at:", address(hook));
+
+        vm.stopBroadcast();
+
+        // ─── Summary ────────────────────────────────────────────────
+        console.log("");
+        console.log("=== Deployment Summary ===");
+        console.log("Vault:", address(vault));
+        console.log("JIT Engine:", address(engine));
+        console.log("Hook:", address(hook));
+        console.log("");
+        console.log("NOTE: Update vault and engine hook addresses manually");
+        console.log("===========================");
+    }
+}
