@@ -1,0 +1,49 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {Script, console} from "forge-std/Script.sol";
+import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
+import {PoolKey} from "v4-core/types/PoolKey.sol";
+import {Currency} from "v4-core/types/Currency.sol";
+import {IHooks} from "v4-core/interfaces/IHooks.sol";
+import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
+
+/// @title InitializePoolScript
+/// @notice Initializes a Uniswap v4 pool with the Prophecy hook
+contract InitializePoolScript is Script {
+    using PoolIdLibrary for PoolKey;
+
+    function run() external {
+        uint256 deployerKey = vm.envUint("PRIVATE_KEY");
+        address poolManager = vm.envAddress("POOL_MANAGER");
+        address hookAddress = vm.envAddress("HOOK_ADDRESS");
+        address token0 = vm.envAddress("TOKEN0");
+        address token1 = vm.envAddress("TOKEN1");
+        uint24 fee = uint24(vm.envUint("POOL_FEE"));
+        int24 tickSpacing = int24(vm.envInt("TICK_SPACING"));
+        uint160 sqrtPriceX96 = uint160(vm.envUint("SQRT_PRICE_X96"));
+
+        vm.startBroadcast(deployerKey);
+
+        // ─── Build PoolKey ──────────────────────────────────────────
+        PoolKey memory poolKey = PoolKey({
+            currency0: Currency.wrap(token0),
+            currency1: Currency.wrap(token1),
+            fee: fee,
+            tickSpacing: tickSpacing,
+            hooks: IHooks(hookAddress)
+        });
+
+        // ─── Initialize Pool ────────────────────────────────────────
+        IPoolManager(poolManager).initialize(poolKey, sqrtPriceX96);
+
+        PoolId poolId = poolKey.toId();
+        console.log("Pool initialized:");
+        console.log("  PoolId:", vm.toString(PoolId.unwrap(poolId)));
+        console.log("  Token0:", token0);
+        console.log("  Token1:", token1);
+        console.log("  Hook:", hookAddress);
+
+        vm.stopBroadcast();
+    }
+}

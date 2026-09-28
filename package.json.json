@@ -1,0 +1,16 @@
+{
+  "name": "v4-prophecy-hook",
+  "version": "0.4.0",
+  "description": "Uniswap v4 hook for asset-backed prediction markets",
+  "private": true,
+  "scripts": {
+    "lint": "solhint 'src/**/*.sol' 'test/**/*.sol' 'script/**/*.sol'",
+    "lint:fix": "solhint 'src/**/*.sol' 'test/**/*.sol' 'script/**/*.sol' --fix",
+    "format": "forge fmt",
+    "test": "forge test -vvv",
+    "coverage": "forge coverage --report summary"
+  },
+  "devDependencies": {
+    "solhint": "^4.5.4"
+  }
+}
